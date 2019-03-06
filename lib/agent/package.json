@@ -1,0 +1,21 @@
+{
+  "name": "frida-agent-example",
+  "version": "1.0.0",
+  "description": "Frida agent example",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "prepare": "npm run build",
+    "build": "frida-compile index.ts -o ../../dist/lib/agent.js",
+    "build:watch": "frida-compile index.ts -o ../../dist/lib/agent.js -w"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.1.2",
+    "@babel/plugin-transform-runtime": "^7.1.0",
+    "@babel/preset-env": "^7.1.0",
+    "@babel/runtime-corejs2": "^7.1.2",
+    "@types/node": "^10.11.3",
+    "frida-compile": "^8.0.1",
+    "frida-gum-types": "^4.0.0"
+  }
+}

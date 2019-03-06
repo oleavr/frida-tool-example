@@ -1,0 +1,45 @@
+{
+  "name": "frida-tool-example",
+  "version": "1.0.0",
+  "description": "Frida CLI tool example",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oleavr/frida-tool-example.git"
+  },
+  "engines": {
+    "node": ">= 10.13 <11"
+  },
+  "files": [
+    "/dist/"
+  ],
+  "bin": {
+    "frida-tool-example": "./dist/bin/frida-tool-example.js"
+  },
+  "scripts": {
+    "clean": "rimraf build",
+    "prepare": "npm run build-app && npm --prefix ./lib/agent install ./lib/agent",
+    "build": "npm run build-app && npm run build-agent",
+    "build-app": "tsc -p tsconfig.release.json",
+    "build-app:watch": "tsc -w -p tsconfig.release.json",
+    "build-agent": "npm --prefix ./lib/agent run build",
+    "build-agent:watch": "npm --prefix ./lib/agent run build:watch",
+    "lint": "tslint -t stylish --project \"tsconfig.json\""
+  },
+  "devDependencies": {
+    "@types/node": "^10.12.29",
+    "@types/pretty-hrtime": "^1.0.0",
+    "prettier": "^1.16.4",
+    "rimraf": "^2.6.3",
+    "tslint": "^5.13.1",
+    "tslint-config-prettier": "^1.18.0",
+    "tslint-microsoft-contrib": "^6.1.0",
+    "typescript": "^3.2.4"
+  },
+  "dependencies": {
+    "chalk": "^2.4.2",
+    "commander": "^2.19.0",
+    "frida": "^12.4.0",
+    "pretty-hrtime": "^1.0.3"
+  }
+}
