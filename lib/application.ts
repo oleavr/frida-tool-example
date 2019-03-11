@@ -58,10 +58,12 @@ export class Application {
             const process = await this.getProcess(targetProcess);
             this.process = process;
 
-            await this.instrument(process.pid, process.name);
+            const agent = await this.instrument(process.pid, process.name);
 
             if (targetProcess.kind === "spawn") {
-                await device.resume(process.pid);
+                await agent.scheduler.perform("Resuming", (): Promise<void> => {
+                    return device.resume(process.pid);
+                });
             }
 
             await this.done;
@@ -100,18 +102,27 @@ export class Application {
 
                 name += ` from ${child.origin}`;
 
-                await this.instrument(child.pid, name);
+                const agent = await this.instrument(child.pid, name);
+
+                await agent.scheduler.perform("Resuming", (): Promise<void> => {
+                    return device.resume(child.pid);
+                });
             } finally {
-                await device.resume(child.pid);
             }
-        } catch (e) {
-            console.error(`Oops: ${e.stack}`);
+        } catch (error) {
+            console.error(`Oops: ${error.stack}`);
+
+            try {
+                await device.resume(child.pid);
+            } catch (error) {
+            }
         }
     };
 
-    private async instrument(pid: number, name: string): Promise<void> {
+    private async instrument(pid: number, name: string): Promise<Agent> {
         const agent = await Agent.inject(this.device as frida.Device, pid, name, this.delegate);
         this.agents.set(pid, agent);
+
         agent.events.once("uninjected", (reason: frida.SessionDetachReason) => {
             this.agents.delete(pid);
 
@@ -136,6 +147,8 @@ export class Application {
                 this.onSuccess();
             }
         });
+
+        return agent;
     }
 
     private async getDevice(targetDevice: TargetDevice): Promise<frida.Device> {
@@ -202,10 +215,10 @@ export interface IDelegate {
 class Agent {
     public pid: number;
     public name: string;
+    public scheduler: OperationScheduler;
     public events: EventEmitter = new EventEmitter();
 
     private delegate: IDelegate;
-    private scheduler: OperationScheduler;
 
     private session: frida.Session | null = null;
     private script: frida.Script | null = null;
@@ -214,9 +227,9 @@ class Agent {
     constructor(pid: number, name: string, delegate: IDelegate) {
         this.pid = pid;
         this.name = name;
+        this.scheduler = new OperationScheduler(name, delegate);
 
         this.delegate = delegate;
-        this.scheduler = new OperationScheduler(name, delegate);
     }
 
     // tslint:disable-next-line:function-name
