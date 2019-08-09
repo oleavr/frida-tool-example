@@ -165,6 +165,9 @@ export class Application {
                 case "remote":
                     device = await frida.getRemoteDevice();
                     break;
+                case "by-host":
+                    device = await frida.getDeviceManager().addRemoteDevice(targetDevice.host);
+                    break;
                 case "by-id":
                     device = await frida.getDevice(targetDevice.id);
                     break;

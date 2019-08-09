@@ -101,6 +101,12 @@ function parseArguments(): IConfig {
                 kind: "remote"
             };
         })
+        .option("-H --host [HOST]", "Connect to remote frida-server by host", (host: string) => {
+            targetDevice = {
+                kind: "by-host",
+                host: host
+            };
+        })
         .option("-D, --device [ID]", "Connect to device with the given ID", (id: string) => {
             targetDevice = {
                 kind: "by-id",
