@@ -18,16 +18,16 @@
     "no-increment-decrement": false,
     "no-null-keyword": false,
     "no-relative-imports": false,
+    "no-reserved-keywords": false,
     "no-this-assignment": [
       true, {
+        "allowed-names": ["^self$"],
         "allow-destructuring": true
       }
     ],
     "prefer-type-cast": false,
     "typedef": [
       true,
-      "parameter",
-      "arrow-parameter",
       "property-declaration",
       "member-variable-declaration"
     ]
