@@ -3,7 +3,7 @@ export interface IConfig {
     targetProcess: TargetProcess;
 }
 
-export type TargetDevice = ITargetDeviceLocal | ITargetDeviceUsb | ITargetDeviceRemote | ITargetDeviceById | ITargetDeviceByHost;
+export type TargetDevice = ITargetDeviceLocal | ITargetDeviceUsb | ITargetDeviceRemote | ITargetDeviceByHost | ITargetDeviceById;
 export type TargetProcess = ITargetProcessSpawn | ITargetProcessByName | ITargetProcessById;
 
 export interface ITargetDeviceLocal {
@@ -18,14 +18,14 @@ export interface ITargetDeviceRemote {
     kind: "remote";
 }
 
-export interface ITargetDeviceById {
-    kind: "by-id";
-    id: string;
-}
-
 export interface ITargetDeviceByHost {
     kind: "by-host";
     host: string;
+}
+
+export interface ITargetDeviceById {
+    kind: "by-id";
+    id: string;
 }
 
 export interface ITargetProcessSpawn {
