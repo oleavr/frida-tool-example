@@ -235,7 +235,6 @@ class Agent {
         this.delegate = delegate;
     }
 
-    // tslint:disable-next-line:function-name
     public static async inject(device: frida.Device, pid: number, name: string, delegate: IDelegate): Promise<Agent> {
         const agent = new Agent(pid, name, delegate);
         const {scheduler} = agent;

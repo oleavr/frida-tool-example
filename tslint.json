@@ -6,6 +6,11 @@
   "rules": {
     "completed-docs": false,
     "export-name": false,
+    "function-name": [
+      true, {
+        "static-method-regex": "^[a-z][\\w\\d]+$"
+      }
+    ],
     "no-any": false,
     "no-console": false,
     "no-empty": false,
