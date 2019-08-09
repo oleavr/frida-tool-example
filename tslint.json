@@ -12,10 +12,17 @@
       }
     ],
     "no-any": false,
+    "no-conditional-assignment": false,
     "no-console": false,
     "no-empty": false,
+    "no-increment-decrement": false,
     "no-null-keyword": false,
     "no-relative-imports": false,
+    "no-this-assignment": [
+      true, {
+        "allow-destructuring": true
+      }
+    ],
     "prefer-type-cast": false,
     "typedef": [
       true,
