@@ -27,11 +27,10 @@
     "lint": "tslint -t stylish --project \"tsconfig.json\""
   },
   "devDependencies": {
-    "@types/node": "^12.7.1",
+    "@types/node": "^12.7.2",
     "@types/pretty-hrtime": "^1.0.0",
     "prettier": "^1.18.2",
-    "rimraf": "^2.6.3",
-    "tslint": "^5.18.0",
+    "tslint": "^5.19.0",
     "tslint-config-prettier": "^1.18.0",
     "tslint-microsoft-contrib": "^6.2.0",
     "typescript": "^3.5.3"
@@ -39,7 +38,7 @@
   "dependencies": {
     "chalk": "^2.4.2",
     "commander": "^3.0.0",
-    "frida": "^12.6.13",
+    "frida": "^12.6.16",
     "pretty-hrtime": "^1.0.3"
   }
 }
