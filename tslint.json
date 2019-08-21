@@ -4,6 +4,7 @@
     "tslint-config-prettier"
   ],
   "rules": {
+    "binary-expression-operand-order": false,
     "completed-docs": false,
     "export-name": false,
     "function-name": [
@@ -15,6 +16,7 @@
     "no-conditional-assignment": false,
     "no-console": false,
     "no-empty": false,
+    "no-function-expression": false,
     "no-increment-decrement": false,
     "no-null-keyword": false,
     "no-relative-imports": false,
