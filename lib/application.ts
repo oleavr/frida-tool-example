@@ -209,7 +209,7 @@ export class Application {
                             const { identifier, pid } = spawn;
                             
                             const processes = await device.enumerateProcesses();
-                            const proc = processes.find((p: frida.Process) => p.pid === pid);
+                            const proc = processes.find(p => p.pid === pid);
                             if (proc === undefined) {
                                 device.resume(pid);
                                 return;
@@ -262,7 +262,6 @@ export class Application {
                 await device.resume(pending.pid);
             }
         } catch (e) {
-            
         }
     }
 }
