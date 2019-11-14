@@ -4,7 +4,7 @@ export interface IConfig {
 }
 
 export type TargetDevice = ITargetDeviceLocal | ITargetDeviceUsb | ITargetDeviceRemote | ITargetDeviceByHost | ITargetDeviceById;
-export type TargetProcess = ITargetProcessSpawn | ITargetProcessByName | ITargetProcessById;
+export type TargetProcess = ITargetProcessSpawn | ITargetProcessByName | ITargetProcessById | ITargetProcessByGating;
 
 export interface ITargetDeviceLocal {
     kind: "local";
@@ -41,4 +41,9 @@ export interface ITargetProcessByName {
 export interface ITargetProcessById {
     kind: "by-id";
     id: number;
+}
+
+export interface ITargetProcessByGating {
+    kind: "by-gating";
+    name: string;
 }

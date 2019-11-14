@@ -18,6 +18,7 @@ export class Application {
     private done: Promise<void>;
     private onSuccess: () => void;
     private onFailure: (error: Error) => void;
+    private onSpawnGatingDisabled: (error: Error) => void;
 
     private scheduler: OperationScheduler;
 
@@ -27,6 +28,8 @@ export class Application {
 
         this.onSuccess = () => {};
         this.onFailure = () => {};
+        this.onSpawnGatingDisabled = () => {};
+
         // tslint:disable-next-line:promise-must-complete
         this.done = new Promise((resolve: () => void, reject: (error: Error) => void) => {
             this.onSuccess = resolve;
@@ -43,6 +46,7 @@ export class Application {
 
         if (this.device !== null) {
             this.device.childAdded.disconnect(this.onChildAdded);
+            await this.disableSpawnGating();
             this.device = null;
         }
     }
@@ -60,7 +64,7 @@ export class Application {
 
             const agent = await this.instrument(process.pid, process.name);
 
-            if (targetProcess.kind === "spawn") {
+            if (targetProcess.kind === "spawn" || targetProcess.kind == "by-gating") {
                 await agent.scheduler.perform("Resuming", (): Promise<void> => {
                     return device.resume(process.pid);
                 });
@@ -196,6 +200,43 @@ export class Application {
                 return this.scheduler.perform(`Resolving "${targetProcess.name}"`, (): Promise<frida.Process> => {
                     return device.getProcess(targetProcess.name);
                 });
+            case "by-gating":
+                return await this.scheduler.perform(`Waiting for "${targetProcess.name}"`, (): Promise<frida.Process> => {
+                    return new Promise((resolve, reject) => {
+                        this.onSpawnGatingDisabled = fatReject;
+
+                        const onSpawnAdded: frida.SpawnAddedHandler = async (spawn) => {
+                            const { identifier, pid } = spawn;
+                            
+                            const processes = await device.enumerateProcesses();
+                            const proc = processes.find((p: frida.Process) => p.pid === pid);
+                            if (proc === undefined) {
+                                device.resume(pid);
+                                return;
+                            }
+    
+                            if (identifier === targetProcess.name || proc.name === targetProcess.name) {
+                                resolve(proc);
+                                return;
+                            }
+    
+                            device.resume(pid);
+                        };
+
+                        device.spawnAdded.connect(onSpawnAdded);
+
+                        device.enableSpawnGating()
+                            .catch(fatReject);
+
+                        function fatReject(error: Error): void {
+                            try {
+                                device.spawnAdded.disconnect(onSpawnAdded);
+                            } catch (e) {
+                            }
+                            reject(error);
+                        }
+                    });
+                });
             default:
                 throw new Error("Invalid target process");
         }
@@ -207,6 +248,22 @@ export class Application {
         }
 
         return proc;
+    }
+
+    private async disableSpawnGating(): Promise<void> {
+        this.onSpawnGatingDisabled(new Error("Spawn gating disabled"));
+
+        const device = this.device as frida.Device;
+
+        try {
+            await device.disableSpawnGating();
+            const pendingSpawns = await device.enumeratePendingSpawn();
+            for (const pending of pendingSpawns) {
+                await device.resume(pending.pid);
+            }
+        } catch (e) {
+            
+        }
     }
 }
 

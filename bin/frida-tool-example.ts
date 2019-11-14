@@ -131,6 +131,12 @@ function parseArguments(): IConfig {
                 id: parseInt(id, 10)
             };
         })
+        .option("-w, --wait [NAME]", "Attach to NAME as soon as it's spawned", (name: string) => {
+            targetProcess = {
+                kind: "by-gating",
+                name: name
+            };
+        })
         .parse(process.argv);
 
     if (targetProcess === null) {
