@@ -12,13 +12,13 @@ $ node dist/bin/frida-tool-example.js -U -f com.example.android
 To continuously recompile on change, keep this running in a terminal:
 
 ```sh
-$ npm run build-app:watch
+$ npm run app:watch
 ```
 
 Plus another terminal with:
 
 ```sh
-$ npm run build-agent:watch
+$ npm run agent:watch
 ```
 
 And use an editor like Visual Studio Code for code completion and instant

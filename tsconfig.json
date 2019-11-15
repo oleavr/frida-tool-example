@@ -1,12 +1,15 @@
 {
   "compilerOptions": {
-    "target": "esnext",
-    "lib": ["esnext"],
+    "rootDir": ".",
+    "outDir": "dist",
+    "target": "es2017",
+    "lib": ["es2017"],
     "module": "commonjs",
-    "allowJs": true,
+    "esModuleInterop": true,
     "strict": true,
     "sourceMap": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "removeComments": true
   },
   "include": [
     "bin/**/*",

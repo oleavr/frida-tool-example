@@ -2,16 +2,14 @@ import { EventEmitter } from "events";
 
 export type HRTime = any;
 
-export interface IOperation {
+export interface Operation {
     scope: string;
     description: string;
     elapsed: HRTime;
     onceComplete(callback: (error?: Error) => void): void;
 }
 
-export class Operation implements IOperation {
-    public scope: string;
-    public description: string;
+export class AsyncOperation implements Operation {
     get elapsed(): HRTime {
         if (this.duration === null) {
             return process.hrtime(this.startTime);
@@ -20,16 +18,15 @@ export class Operation implements IOperation {
         return this.duration;
     }
 
-    private startTime: HRTime;
-    private duration: HRTime | null;
+    private startTime: HRTime = process.hrtime();
+    private duration: HRTime | null = null;
     private events: EventEmitter = new EventEmitter();
 
-    constructor(scope: string, description: string) {
+    constructor(
+            public scope: string,
+            public description: string) {
         this.scope = scope;
         this.description = description;
-
-        this.startTime = process.hrtime();
-        this.duration = null;
     }
 
     public onceComplete(callback: (error?: Error) => void) {

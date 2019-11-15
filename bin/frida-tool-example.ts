@@ -1,7 +1,16 @@
+import {
+    Application,
+    Config,
+    Delegate,
+    Operation,
+    LogLevel,
+    TargetDevice,
+    TargetProcess,
+} from "../lib";
+
 import chalk, { Chalk } from "chalk";
-import * as program from "commander";
-import * as prettyHrtime from "pretty-hrtime";
-import { Application, IConfig, IDelegate, IOperation, LogLevel, TargetDevice, TargetProcess } from "../lib";
+import program from "commander";
+import prettyHrtime from "pretty-hrtime";
 
 async function main(): Promise<void> {
     try {
@@ -27,10 +36,10 @@ async function main(): Promise<void> {
     }
 }
 
-class ConsoleUI implements IDelegate {
-    private pendingOperation: IPendingOperation | null = null;
+class ConsoleUI implements Delegate {
+    private pendingOperation: PendingOperation | null = null;
 
-    public onProgress(operation: IOperation): void {
+    public onProgress(operation: Operation): void {
         process.stdout.write(`[${operation.scope}] ${chalk.cyan(operation.description)} `);
 
         const pending = {
@@ -79,12 +88,12 @@ class ConsoleUI implements IDelegate {
     }
 }
 
-interface IPendingOperation {
-    operation: IOperation;
+interface PendingOperation {
+    operation: Operation;
     logMessageCount: number;
 }
 
-function parseArguments(): IConfig {
+function parseArguments(): Config {
     let targetDevice: TargetDevice = {
         kind: "local"
     };

@@ -1,49 +1,61 @@
-export interface IConfig {
+export interface Config {
     targetDevice: TargetDevice;
     targetProcess: TargetProcess;
 }
 
-export type TargetDevice = ITargetDeviceLocal | ITargetDeviceUsb | ITargetDeviceRemote | ITargetDeviceByHost | ITargetDeviceById;
-export type TargetProcess = ITargetProcessSpawn | ITargetProcessByName | ITargetProcessById | ITargetProcessByGating;
+export type TargetDevice =
+    | TargetDeviceLocal
+    | TargetDeviceUsb
+    | TargetDeviceRemote
+    | TargetDeviceByHost
+    | TargetDeviceById
+    ;
 
-export interface ITargetDeviceLocal {
+export type TargetProcess =
+    | TargetProcessSpawn
+    | TargetProcessByName
+    | TargetProcessById
+    | TargetProcessByGating
+    ;
+
+export interface TargetDeviceLocal {
     kind: "local";
 }
 
-export interface ITargetDeviceUsb {
+export interface TargetDeviceUsb {
     kind: "usb";
 }
 
-export interface ITargetDeviceRemote {
+export interface TargetDeviceRemote {
     kind: "remote";
 }
 
-export interface ITargetDeviceByHost {
+export interface TargetDeviceByHost {
     kind: "by-host";
     host: string;
 }
 
-export interface ITargetDeviceById {
+export interface TargetDeviceById {
     kind: "by-id";
     id: string;
 }
 
-export interface ITargetProcessSpawn {
+export interface TargetProcessSpawn {
     kind: "spawn";
     program: string;
 }
 
-export interface ITargetProcessByName {
+export interface TargetProcessByName {
     kind: "by-name";
     name: string;
 }
 
-export interface ITargetProcessById {
+export interface TargetProcessById {
     kind: "by-id";
     id: number;
 }
 
-export interface ITargetProcessByGating {
+export interface TargetProcessByGating {
     kind: "by-gating";
     name: string;
 }

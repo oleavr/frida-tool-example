@@ -1,17 +1,15 @@
+import { AgentApi } from "./agent/interfaces";
+import { Config, TargetDevice, TargetProcess } from "./config";
+import { Operation, AsyncOperation } from "./operation";
+
 import { EventEmitter } from "events";
 import * as frida from "frida";
 import * as fs from "fs";
 import { promisify } from "util";
-import { IAgent } from "./agent/interfaces";
-import { IConfig, TargetDevice, TargetProcess } from "./config";
-import { IOperation, Operation } from "./operation";
 
 const readFile = promisify(fs.readFile);
 
 export class Application {
-    private config: IConfig;
-    private delegate: IDelegate;
-
     private device: frida.Device | null = null;
     private process: frida.Process | null = null;
     private agents: Map<number, Agent> = new Map<number, Agent>();
@@ -22,15 +20,13 @@ export class Application {
 
     private scheduler: OperationScheduler;
 
-    constructor(config: IConfig, delegate: IDelegate) {
-        this.config = config;
-        this.delegate = delegate;
-
+    constructor(
+            private config: Config,
+            private delegate: Delegate) {
         this.onSuccess = () => {};
         this.onFailure = () => {};
         this.onSpawnGatingDisabled = () => {};
 
-        // tslint:disable-next-line:promise-must-complete
         this.done = new Promise((resolve: () => void, reject: (error: Error) => void) => {
             this.onSuccess = resolve;
             this.onFailure = reject;
@@ -53,7 +49,7 @@ export class Application {
 
     public async run(): Promise<void> {
         try {
-            const {targetDevice, targetProcess} = this.config;
+            const { targetDevice, targetProcess } = this.config;
 
             const device = await this.getDevice(targetDevice);
             this.device = device;
@@ -83,12 +79,12 @@ export class Application {
             try {
                 let name: string | null = null;
 
-                const {path} = child;
+                const { path } = child;
                 if (path !== null) {
                     name = path;
                 }
 
-                const {identifier} = child;
+                const { identifier } = child;
                 if (identifier !== null) {
                     name = identifier;
                 }
@@ -207,19 +203,19 @@ export class Application {
 
                         const onSpawnAdded: frida.SpawnAddedHandler = async (spawn) => {
                             const { identifier, pid } = spawn;
-                            
+
                             const processes = await device.enumerateProcesses();
                             const proc = processes.find(p => p.pid === pid);
                             if (proc === undefined) {
                                 device.resume(pid);
                                 return;
                             }
-    
+
                             if (identifier === targetProcess.name || proc.name === targetProcess.name) {
                                 resolve(proc);
                                 return;
                             }
-    
+
                             device.resume(pid);
                         };
 
@@ -266,8 +262,8 @@ export class Application {
     }
 }
 
-export interface IDelegate {
-    onProgress(operation: IOperation): void;
+export interface Delegate {
+    onProgress(operation: Operation): void;
     onConsoleMessage(scope: string, level: frida.LogLevel, text: string): void;
 }
 
@@ -277,13 +273,13 @@ class Agent {
     public scheduler: OperationScheduler;
     public events: EventEmitter = new EventEmitter();
 
-    private delegate: IDelegate;
+    private delegate: Delegate;
 
     private session: frida.Session | null = null;
     private script: frida.Script | null = null;
-    private api: IAgent | null = null;
+    private api: AgentApi | null = null;
 
-    constructor(pid: number, name: string, delegate: IDelegate) {
+    constructor(pid: number, name: string, delegate: Delegate) {
         this.pid = pid;
         this.name = name;
         this.scheduler = new OperationScheduler(name, delegate);
@@ -291,9 +287,9 @@ class Agent {
         this.delegate = delegate;
     }
 
-    public static async inject(device: frida.Device, pid: number, name: string, delegate: IDelegate): Promise<Agent> {
+    public static async inject(device: frida.Device, pid: number, name: string, delegate: Delegate): Promise<Agent> {
         const agent = new Agent(pid, name, delegate);
-        const {scheduler} = agent;
+        const { scheduler } = agent;
 
         try {
             const session = await scheduler.perform(`Attaching to PID ${pid}`, (): Promise<frida.Session> => {
@@ -316,10 +312,10 @@ class Agent {
                 return script.load();
             });
 
-            agent.api = script.exports as any as IAgent;
+            agent.api = script.exports as any as AgentApi;
 
             await scheduler.perform("Initializing", (): Promise<void> => {
-                return (agent.api as IAgent).init();
+                return (agent.api as AgentApi).init();
             });
         } catch (e) {
             await agent.dispose();
@@ -377,18 +373,15 @@ class Agent {
 }
 
 class OperationScheduler {
-    private scope: string;
-    private delegate: IDelegate;
-
-    constructor(scope: string, delegate: IDelegate) {
-        this.scope = scope;
-        this.delegate = delegate;
+    constructor(
+            private scope: string,
+            private delegate: Delegate) {
     }
 
     public async perform<T>(description: string, work: () => Promise<T>): Promise<T> {
         let result: T;
 
-        const operation = new Operation(this.scope, description);
+        const operation = new AsyncOperation(this.scope, description);
         this.delegate.onProgress(operation);
 
         try {

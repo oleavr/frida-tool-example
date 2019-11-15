@@ -1,6 +1,6 @@
-import { IAgent } from "./interfaces";
+import { AgentApi } from "./interfaces";
 
-class Agent implements IAgent {
+class Agent implements AgentApi {
     public async init(): Promise<void> {
         console.log(`Hello World from PID: ${Process.id}`);
         console.warn("Example warning");

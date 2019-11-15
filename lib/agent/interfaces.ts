@@ -1,3 +1,3 @@
-export interface IAgent {
+export interface AgentApi {
     init(): Promise<void>;
 }
