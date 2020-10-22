@@ -301,9 +301,9 @@ class Agent {
                 return session.enableChildGating();
             });
 
-            const source = await readFile(require.resolve("./agent"), "utf-8");
+            const code = await readFile(require.resolve("./agent.qjs"));
             const script = await scheduler.perform("Creating script", (): Promise<frida.Script> => {
-                return session.createScript(source);
+                return session.createScriptFromBytes(code, { runtime: frida.ScriptRuntime.QJS });
             });
             agent.script = script;
             script.logHandler = agent.onConsoleMessage;
