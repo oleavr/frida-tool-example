@@ -6,7 +6,7 @@
   "main": "index.ts",
   "scripts": {
     "prepare": "npm run build",
-    "build": "frida-compile index.ts -o ../../dist/lib/agent.js",
+    "build": "frida-compile index.ts -o ../../dist/lib/agent.js -c",
     "watch": "frida-compile index.ts -o ../../dist/lib/agent.js -w"
   },
   "devDependencies": {
