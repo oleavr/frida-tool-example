@@ -25,14 +25,14 @@
     "agent:watch": "npm --prefix ./lib/agent run watch"
   },
   "devDependencies": {
-    "@types/node": "^14.0.14",
+    "@types/node": "^14.14.2",
     "@types/pretty-hrtime": "^1.0.0",
-    "typescript": "^3.9.6"
+    "typescript": "^4.0.3"
   },
   "dependencies": {
     "chalk": "^4.1.0",
-    "commander": "^5.1.0",
-    "frida": "^12.10.4",
+    "commander": "^6.1.0",
+    "frida": "^14.0.0",
     "pretty-hrtime": "^1.0.3"
   }
 }
