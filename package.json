@@ -8,7 +8,7 @@
     "url": "https://github.com/oleavr/frida-tool-example.git"
   },
   "engines": {
-    "node": ">= 10.13"
+    "node": ">= 14"
   },
   "files": [
     "/dist/"
