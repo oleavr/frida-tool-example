@@ -1,6 +1,6 @@
-import { AgentApi } from "./agent/interfaces";
-import { Config, TargetDevice, TargetProcess } from "./config";
-import { Operation, AsyncOperation } from "./operation";
+import { AgentApi } from "./agent/interfaces.js";
+import { Config, TargetDevice, TargetProcess } from "./config.js";
+import { Operation, AsyncOperation } from "./operation.js";
 
 import { EventEmitter } from "events";
 import * as frida from "frida";
@@ -110,7 +110,7 @@ export class Application {
             } finally {
             }
         } catch (error) {
-            console.error(`Oops: ${error.stack}`);
+            console.error(`Oops: ${(error as Error).stack}`);
 
             try {
                 await device.resume(child.pid);
@@ -134,7 +134,7 @@ export class Application {
                     case frida.SessionDetachReason.ProcessReplaced:
                         return;
                     case frida.SessionDetachReason.ProcessTerminated:
-                    case frida.SessionDetachReason.ServerTerminated:
+                    case frida.SessionDetachReason.ConnectionTerminated:
                     case frida.SessionDetachReason.DeviceLost:
                         const message = reason[0].toUpperCase() + reason.substr(1).replace(/-/g, " ");
                         this.onFailure(new Error(message));
@@ -301,7 +301,7 @@ class Agent {
                 return session.enableChildGating();
             });
 
-            const code = await readFile(require.resolve("./agent.js"), "utf-8");
+            const code = await readFile(new URL("./agent.js", import.meta.url).pathname, "utf-8");
             const script = await scheduler.perform("Creating script", (): Promise<frida.Script> => {
                 return session.createScript(code, { runtime: frida.ScriptRuntime.QJS });
             });
@@ -389,7 +389,7 @@ class OperationScheduler {
 
             operation.complete();
         } catch (error) {
-            operation.complete(error);
+            operation.complete(error as Error);
             throw error;
         }
 

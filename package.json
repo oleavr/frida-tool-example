@@ -3,12 +3,13 @@
   "version": "1.0.0",
   "description": "Frida CLI tool example",
   "license": "MIT",
+  "type": "module",
   "repository": {
     "type": "git",
     "url": "https://github.com/oleavr/frida-tool-example.git"
   },
   "engines": {
-    "node": ">= 14"
+    "node": ">= 16"
   },
   "files": [
     "/dist/"
@@ -25,14 +26,14 @@
     "agent:watch": "npm --prefix ./lib/agent run watch"
   },
   "devDependencies": {
-    "@types/node": "^14.14.10",
-    "@types/pretty-hrtime": "^1.0.0",
-    "typescript": "^4.1.2"
+    "@types/node": "^17.0.23",
+    "@types/pretty-hrtime": "^1.0.1",
+    "typescript": "^4.6.3"
   },
   "dependencies": {
-    "chalk": "^4.1.0",
-    "commander": "^6.2.0",
-    "frida": "^14.1.2",
+    "chalk": "^5.0.1",
+    "commander": "^9.1.0",
+    "frida": "^15.1.17",
     "pretty-hrtime": "^1.0.3"
   }
 }

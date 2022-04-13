@@ -1,6 +1,6 @@
-import * as application from "./application";
-import * as config from "./config";
-import * as operation from "./operation";
+import * as application from "./application.js";
+import * as config from "./config.js";
+import * as operation from "./operation.js";
 
 import * as frida from "frida";
 

@@ -6,10 +6,10 @@ import {
     LogLevel,
     TargetDevice,
     TargetProcess,
-} from "../lib";
+} from "../lib/index.js";
 
-import chalk, { Chalk } from "chalk";
-import program from "commander";
+import chalk, { ChalkInstance } from "chalk";
+import { program, Command } from "commander";
 import prettyHrtime from "pretty-hrtime";
 
 async function main(): Promise<void> {
@@ -32,7 +32,7 @@ async function main(): Promise<void> {
         }
     } catch (error) {
         process.exitCode = 1;
-        process.stderr.write(`${chalk.redBright(error.message)}\n`);
+        process.stderr.write(`${chalk.redBright((error as Error).stack)}\n`);
     }
 }
 
@@ -60,7 +60,7 @@ class ConsoleUI implements Delegate {
     }
 
     public onConsoleMessage(scope: string, level: LogLevel, text: string): void {
-        let c: Chalk;
+        let c: ChalkInstance;
         switch (level) {
             case "info":
                 c = chalk.whiteBright;
@@ -158,7 +158,7 @@ function parseArguments(): Config {
     };
 }
 
-function inferTargetProcess(prog: program.CommanderStatic): TargetProcess {
+function inferTargetProcess(prog: Command): TargetProcess {
     const spec = prog.args[0];
     if (spec === undefined) {
         throw new Error("Expected a target");
