@@ -1,4 +1,4 @@
-import { AgentApi } from "./interfaces";
+import { AgentApi } from "./interfaces.js";
 
 class Agent implements AgentApi {
     public async init(): Promise<void> {
