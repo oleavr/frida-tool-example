@@ -140,6 +140,11 @@ function parseArguments(): Config {
                 id: parseInt(id, 10)
             };
         })
+        .option("-F, --attach-frontmost", "attach to frontmost application", () => {
+            targetProcess = {
+                kind: "by-frontmost"
+            };
+        })
         .option("-w, --wait [NAME]", "Attach to NAME as soon as it's spawned", (name: string) => {
             targetProcess = {
                 kind: "by-gating",
