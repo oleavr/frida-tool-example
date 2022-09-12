@@ -233,6 +233,13 @@ export class Application {
                         }
                     });
                 });
+            case "by-frontmost":
+                const frontmost = await device.getFrontmostApplication();
+                if (frontmost === null) {
+                    throw new Error(`No frontmost application on ${device.name}`);
+                }
+                pid = frontmost.pid;
+                break;
             default:
                 throw new Error("Invalid target process");
         }

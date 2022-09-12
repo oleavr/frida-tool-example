@@ -16,6 +16,7 @@ export type TargetProcess =
     | TargetProcessByName
     | TargetProcessById
     | TargetProcessByGating
+    | TargetProcessByFrontmost
     ;
 
 export interface TargetDeviceLocal {
@@ -58,4 +59,8 @@ export interface TargetProcessById {
 export interface TargetProcessByGating {
     kind: "by-gating";
     name: string;
+}
+
+export interface TargetProcessByFrontmost {
+    kind: "by-frontmost";
 }
