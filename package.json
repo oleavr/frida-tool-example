@@ -34,7 +34,7 @@
     "async-mutex": "^0.4.0",
     "chalk": "^5.0.1",
     "commander": "^9.4.0",
-    "frida": "^15.2.2",
+    "frida": "^16.0.1",
     "pretty-hrtime": "^1.0.3"
   }
 }
