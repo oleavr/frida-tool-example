@@ -14,6 +14,7 @@ export type TargetDevice =
 export type TargetProcess =
     | TargetProcessSpawn
     | TargetProcessByName
+    | TargetProcessAllByName
     | TargetProcessById
     | TargetProcessByGating
     | TargetProcessByFrontmost
@@ -51,9 +52,14 @@ export interface TargetProcessByName {
     name: string;
 }
 
+export interface TargetProcessAllByName {
+    kind: "all-by-name";
+    name: string;
+}
+
 export interface TargetProcessById {
-    kind: "by-id";
-    id: number;
+    kind: "by-ids";
+    ids: number[];
 }
 
 export interface TargetProcessByGating {

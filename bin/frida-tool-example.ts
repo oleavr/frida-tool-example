@@ -97,6 +97,7 @@ function parseArguments(): Config {
     let targetDevice: TargetDevice = {
         kind: "local"
     };
+    let pids: number[] = [];
     let targetProcess: TargetProcess | null = null;
 
     program
@@ -134,10 +135,17 @@ function parseArguments(): Config {
                 name: name
             };
         })
-        .option("-p, --attach-pid [PID]", "Attach to PID", (id: string) => {
+        .option("-a, --all-by-name [NAME]", "Attach to all processes named NAME", (name: string) => {
             targetProcess = {
-                kind: "by-id",
-                id: parseInt(id, 10)
+                kind: "all-by-name",
+                name: name
+            };
+        })
+        .option("-p, --attach-pid [PID]", "Attach to PID", (id: string) => {
+            pids.push(parseInt(id, 10));
+            targetProcess = {
+                kind: "by-ids",
+                ids: pids
             };
         })
         .option("-F, --attach-frontmost", "attach to frontmost application", () => {
@@ -159,7 +167,7 @@ function parseArguments(): Config {
 
     return {
         targetDevice,
-        targetProcess,
+        targetProcess
     };
 }
 
@@ -172,8 +180,8 @@ function inferTargetProcess(prog: Command): TargetProcess {
     const potentialPid = parseInt(spec, 10);
     if (!isNaN(potentialPid)) {
         return {
-            kind: "by-id",
-            id: potentialPid
+            kind: "by-ids",
+            ids: [potentialPid]
         }
     }
 
