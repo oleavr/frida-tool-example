@@ -8,6 +8,7 @@ import * as fs from "fs";
 import { promisify } from "util";
 import { resolve } from "path";
 import { LogLevel } from "frida/dist/script.js";
+import { Cancellable } from "frida/dist/cancellable.js";
 
 const readFile = promisify(fs.readFile);
 
@@ -16,6 +17,7 @@ export class Application {
     private processes: Map<number, frida.Process> = new Map<number, frida.Process>()
     private agents: Map<number, Agent> = new Map<number, Agent>();
     private done: Promise<void>;
+    private cancellable: frida.Cancellable = new Cancellable();
     private onSuccess: () => void;
     private onFailure: (error: Error) => void;
     private onSpawnGatingDisabled: (error: Error) => void;
@@ -34,13 +36,14 @@ export class Application {
             this.onFailure = reject;
         });
 
+        this.done.finally(() => this.dispose());
+
         this.scheduler = new OperationScheduler("application", delegate);
     }
 
     public async dispose(): Promise<void> {
-        while (this.agents.size > 0) {
-            await Array.from(this.agents.values())[0].dispose();
-        }
+        await Promise.all(Array.from(this.agents.values()).map(a => a.dispose()));
+        this.cancellable.cancel();
 
         if (this.device !== null) {
             this.device.childAdded.disconnect(this.onChildAdded);
@@ -50,36 +53,32 @@ export class Application {
     }
 
     public async run(): Promise<void> {
-        try {
-            const { targetDevice, targetProcess } = this.config;
+        const { targetDevice, targetProcess } = this.config;
 
-            const device = await this.getDevice(targetDevice);
-            this.device = device;
-            device.childAdded.connect(this.onChildAdded);
+        const device = await this.getDevice(targetDevice);
+        this.device = device;
+        device.childAdded.connect(this.onChildAdded);
 
-            const processes = await this.getProcesses(targetProcess);
-            for (let process of processes) {
-                if (!this.processes.has (process.pid)) {
-                    this.processes.set(process.pid, process);
+        const processes = await this.getProcesses(targetProcess);
+        for (let process of processes) {
+            if (!this.processes.has(process.pid)) {
+                this.processes.set(process.pid, process);
 
-                    const agent = await this.instrument(process.pid, process.name);
+                const agent = await this.instrument(process.pid, process.name);
 
-                    if (targetProcess.kind === "spawn" || targetProcess.kind == "by-gating") {
-                        await agent.scheduler.perform("Resuming", (): Promise<void> => {
-                            return device.resume(process.pid);
-                        });
-                    }
+                if (targetProcess.kind === "spawn" || targetProcess.kind == "by-gating") {
+                    await agent.scheduler.perform("Resuming", (): Promise<void> => {
+                        return device.resume(process.pid);
+                    });
                 }
             }
-
-            if (targetProcess.kind == "all-by-name") {
-                await this.enlistNewProcesses(targetProcess);
-            }
-
-            await this.done;
-        } finally {
-            this.dispose();
         }
+
+        if (targetProcess.kind == "all-by-name") {
+            await this.enlistNewProcesses(targetProcess.name);
+        }
+
+        return this.done;
     }
 
     private onChildAdded = async (child: frida.Child): Promise<void> => {
@@ -133,10 +132,18 @@ export class Application {
         const agent = await Agent.inject(this.device as frida.Device, pid, name, this.delegate);
         this.agents.set(pid, agent);
 
+        if (this.config.targetProcess.kind === "all-by-name") {
+            this.delegate.onConsoleMessage("application", LogLevel.Info, `Attached PID: ${name}:${pid}@${this.device?.name}, ${this.processes.size} total`);
+        } else {
+            this.delegate.onConsoleMessage("application", LogLevel.Info, `Attached PID: ${name}:${pid}@${this.device?.name}`);
+        }
+
+
         agent.events.once("uninjected", (reason: frida.SessionDetachReason) => {
             this.agents.delete(pid);
 
             if (this.processes.has(pid)) {
+                let name = this.processes.get(pid)?.name;
                 this.processes.delete(pid);
                 switch (reason) {
                     case frida.SessionDetachReason.ApplicationRequested:
@@ -144,10 +151,16 @@ export class Application {
                     case frida.SessionDetachReason.ProcessReplaced:
                         return;
                     case frida.SessionDetachReason.ProcessTerminated:
-                        if (this.processes.size != 0) {
-                            this.delegate.onConsoleMessage("application", LogLevel.Warning, `Detached PID: ${pid}`);
-                            return;
+                        if (this.config.targetProcess.kind === "all-by-name") {
+                            this.delegate.onConsoleMessage("application", LogLevel.Warning, `Detached PID: ${name}:${pid}@${this.device?.name}, ${this.processes.size} remaining`);
+                        } else {
+                            this.delegate.onConsoleMessage("application", LogLevel.Warning, `Detached PID: ${name}:${pid}@${this.device?.name}`);
                         }
+
+                        if (this.processes.size == 0) {
+                            this.delegate.onConsoleMessage("application", LogLevel.Warning, `All processes lost on host: ${this.device?.name}\n`);
+                        }
+                        break;
                     case frida.SessionDetachReason.ConnectionTerminated:
                     case frida.SessionDetachReason.DeviceLost:
                         const message = reason[0].toUpperCase() + reason.substr(1).replace(/-/g, " ");
@@ -157,8 +170,10 @@ export class Application {
                 }
             }
 
-            if (this.agents.size === 0) {
-                this.onSuccess();
+            if (this.config.targetProcess.kind !== "all-by-name") {
+                if (this.agents.size === 0) {
+                    this.onSuccess();
+                }
             }
         });
 
@@ -171,19 +186,19 @@ export class Application {
 
             switch (targetDevice.kind) {
                 case "local":
-                    device = await frida.getLocalDevice();
+                    device = await frida.getLocalDevice(this.cancellable);
                     break;
                 case "usb":
-                    device = await frida.getUsbDevice();
+                    device = await frida.getUsbDevice(undefined, this.cancellable);
                     break;
                 case "remote":
-                    device = await frida.getRemoteDevice();
+                    device = await frida.getRemoteDevice(this.cancellable);
                     break;
                 case "by-host":
-                    device = await frida.getDeviceManager().addRemoteDevice(targetDevice.host);
+                    device = await frida.getDeviceManager().addRemoteDevice(targetDevice.host, undefined, this.cancellable);
                     break;
                 case "by-id":
-                    device = await frida.getDevice(targetDevice.id);
+                    device = await frida.getDevice(targetDevice.id, undefined, this.cancellable);
                     break;
                 default:
                     throw new Error("Invalid target device");
@@ -193,21 +208,17 @@ export class Application {
         });
     }
 
-    private async findNamedProcesses(targetProcess: TargetProcessAllByName): Promise<frida.Process[]> {
-        try {
-            const device = this.device as frida.Device;
-            const processes = await device.enumerateProcesses();
-            const untraced = processes.filter(process => !this.agents.has(process.pid));
-            const named = untraced.filter(process => process.name === targetProcess.name);
-            return named;
-        } catch (error) {
-            return [];
-        }
+    private async findNamedProcesses(targetProcessName: string): Promise<frida.Process[]> {
+        const device = this.device as frida.Device;
+        const processes = await device.enumerateProcesses(undefined, this.cancellable);
+        const untraced = processes.filter(process => !this.agents.has(process.pid));
+        const named = untraced.filter(process => process.name === targetProcessName);
+        return named;
     }
 
     private async findNumberedProcesses(targetProcess: TargetProcessById): Promise<frida.Process[]> {
         const device = this.device as frida.Device;
-        const processes = await device.enumerateProcesses();
+        const processes = await device.enumerateProcesses(undefined, this.cancellable);
         const processesById = new Map<number, frida.Process>(processes.map(p => [p.pid, p]));
         const notFound = targetProcess.ids.filter(pid => !processesById.has(pid));
         if (notFound.length !== 0) {
@@ -218,17 +229,10 @@ export class Application {
         return found;
     }
 
-    private async enlistNewProcesses(targetProcess: TargetProcessAllByName): Promise<void> {
-        let halt = false;
+    private async enlistNewProcesses(targetProcessName: string): Promise<void> {
 
-        this.done.then(() => {
-                halt = true
-            }).catch(() => {
-                halt = true;
-            });
-
-        while (!halt) {
-            const processes = await this.findNamedProcesses(targetProcess);
+        while (!this.cancellable.isCancelled) {
+            const processes = await this.findNamedProcesses(targetProcessName);
             for (let process of processes) {
                 if (!this.processes.has (process.pid)) {
                     this.processes.set(process.pid, process);
@@ -261,11 +265,20 @@ export class Application {
                 });
             case "by-name":
                 return this.scheduler.perform(`Resolving "${targetProcess.name}"`, async (): Promise<frida.Process[]> => {
-                    return [await device.getProcess(targetProcess.name)];
+                    return [await device.getProcess(targetProcess.name, undefined, this.cancellable)];
                 });
             case "all-by-name":
                 return this.scheduler.perform(`Resolving "${targetProcess.name}"`, async (): Promise<frida.Process[]> => {
-                    return this.findNamedProcesses(targetProcess);
+                    return this.findNamedProcesses(targetProcess.name);
+                });
+            case "any-by-name":
+                return this.scheduler.perform(`Resolving "${targetProcess.name}"`, async (): Promise<frida.Process[]> => {
+                    return this.findNamedProcesses(targetProcess.name).then((targetProcesses) => {
+                        if (targetProcesses.length === 0) {
+                            throw new Error(`Failed to find process "${targetProcess.name}" on host "${this.device?.name}"`)
+                        }
+                        return [targetProcesses[0]]
+                    });
                 });
             case "by-gating":
                 return await this.scheduler.perform(`Waiting for "${targetProcess.name}"`, (): Promise<frida.Process[]> => {
@@ -275,7 +288,7 @@ export class Application {
                         const onSpawnAdded: frida.SpawnAddedHandler = async (spawn) => {
                             const { identifier, pid } = spawn;
 
-                            const processes = await device.enumerateProcesses();
+                            const processes = await device.enumerateProcesses(undefined, this.cancellable);
                             const proc = processes.find(p => p.pid === pid);
                             if (proc === undefined) {
                                 device.resume(pid);
@@ -305,7 +318,7 @@ export class Application {
                     });
                 });
             case "by-frontmost":
-                const frontmost = await device.getFrontmostApplication();
+                const frontmost = await device.getFrontmostApplication(undefined, this.cancellable);
                 if (frontmost === null) {
                     throw new Error(`No frontmost application on ${device.name}`);
                 }
@@ -315,7 +328,7 @@ export class Application {
                 throw new Error("Invalid target process");
         }
 
-        const processes = await device.enumerateProcesses();
+        const processes = await device.enumerateProcesses(undefined, this.cancellable);
         const proc = processes.find((p: frida.Process) => p.pid === pid);
         if (proc === undefined) {
             throw new Error("Process not found");
@@ -346,6 +359,7 @@ export interface Delegate {
 }
 
 class Agent {
+    public device: string;
     public pid: number;
     public name: string;
     public scheduler: OperationScheduler;
@@ -357,20 +371,21 @@ class Agent {
     private script: frida.Script | null = null;
     private api: AgentApi | null = null;
 
-    constructor(pid: number, name: string, delegate: Delegate) {
+    constructor(device: string, pid: number, name: string, delegate: Delegate) {
+        this.device = device;
         this.pid = pid;
         this.name = name;
-        this.scheduler = new OperationScheduler(`${this.name}:${this.pid}`, delegate);
+        this.scheduler = new OperationScheduler(`${this.name}:${this.pid}@${this.device}`, delegate);
 
         this.delegate = delegate;
     }
 
     public static async inject(device: frida.Device, pid: number, name: string, delegate: Delegate): Promise<Agent> {
-        const agent = new Agent(pid, name, delegate);
+        const agent = new Agent(device.name, pid, name, delegate);
         const { scheduler } = agent;
 
         try {
-            const session = await scheduler.perform(`Attaching to PID ${pid}`, (): Promise<frida.Session> => {
+            const session = await scheduler.perform(`Attaching to PID ${name}:${pid}@${device.name}`, (): Promise<frida.Session> => {
                 return device.attach(pid);
             });
             agent.session = session;
@@ -434,7 +449,7 @@ class Agent {
     };
 
     private onConsoleMessage = (level: frida.LogLevel, text: string): void => {
-        this.delegate.onConsoleMessage(`${this.name}:${this.pid}`, level, text);
+        this.delegate.onConsoleMessage(`${this.name}:${this.pid}@${this.device}`, level, text);
     };
 
     private onMessage = (message: frida.Message, data: Buffer | null): void => {

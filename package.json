@@ -31,6 +31,7 @@
     "typescript": "^4.7.4"
   },
   "dependencies": {
+    "async-mutex": "^0.4.0",
     "chalk": "^5.0.1",
     "commander": "^9.4.0",
     "frida": "^15.2.2",

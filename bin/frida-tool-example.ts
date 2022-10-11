@@ -11,80 +11,97 @@ import {
 import chalk, { ChalkInstance } from "chalk";
 import { program, Command } from "commander";
 import prettyHrtime from "pretty-hrtime";
+import { Mutex } from 'async-mutex';
 
 async function main(): Promise<void> {
+    let apps: Application[] = [];
+
+    function stop(): void {
+        for (let app of apps) {
+            app.dispose();
+        }
+    }
+
     try {
-        const config = parseArguments();
+        const args = parseArguments();
         const ui = new ConsoleUI();
 
-        let app: Application | null = new Application(config, ui);
+        for (let targetDevice of args.targetDevices) {
+            let config: Config = {
+                targetDevice,
+                targetProcess: args.targetProcess
+            };
+            let app = new Application(config, ui);
+            apps.push(app);
+        }
 
         process.on("SIGINT", stop);
         process.on("SIGTERM", stop);
 
-        await app.run();
+        await Promise.all(apps.map(a => a.run()));
 
-        function stop(): void {
-            if (app !== null) {
-                app.dispose();
-                app = null;
-            }
-        }
     } catch (error) {
         process.exitCode = 1;
-        process.stderr.write(`${chalk.redBright((error as Error).stack)}\n`);
+        let e = error as Error;
+        process.stderr.write(`${chalk.redBright(e.stack)}\n`);
+    }
+    finally {
+        stop();
     }
 }
 
 class ConsoleUI implements Delegate {
     private pendingOperation: PendingOperation | null = null;
+    private mutex: Mutex = new Mutex();
 
     public onProgress(operation: Operation): void {
-        process.stdout.write(`[${operation.scope}] ${chalk.cyan(operation.description)} `);
+        this.mutex.runExclusive(() => {
+            const pending = {
+                operation: operation,
+                logMessageCount: 0,
+            };
+            this.pendingOperation = pending;
 
-        const pending = {
-            operation: operation,
-            logMessageCount: 0,
-        };
-        this.pendingOperation = pending;
+            operation.onceComplete(() => {
+                if (pending.logMessageCount > 0) {
+                    process.stdout.write(`[${operation.scope}] ${chalk.cyan(`${operation.description} completed`)}\n`);
+                }
 
-        operation.onceComplete(() => {
-            if (pending.logMessageCount > 0) {
-                process.stdout.write(`[${operation.scope}] ${chalk.cyan(`${operation.description} completed`)} `);
-            }
+                process.stdout.write(`[${operation.scope}] ${chalk.cyan(operation.description)} ${chalk.gray(prettyHrtime(operation.elapsed))}\n`);
 
-            process.stdout.write(chalk.gray(`(${prettyHrtime(operation.elapsed)})\n`));
-
-            this.pendingOperation = null;
+                this.pendingOperation = null;
+            });
         });
     }
 
     public onConsoleMessage(scope: string, level: LogLevel, text: string): void {
-        let c: ChalkInstance;
-        switch (level) {
-            case "info":
-                c = chalk.whiteBright;
-                break;
-            case "warning":
-                c = chalk.yellowBright;
-                break;
-            case "error":
-                c = chalk.redBright;
-                break;
-            default:
-                c = chalk.grey;
-        }
-
-        const pending = this.pendingOperation;
-        if (pending !== null) {
-            if (pending.logMessageCount === 0) {
-                process.stdout.write(`${chalk.gray("...")}\n`);
+        this.mutex.runExclusive(() => {
+            let c: ChalkInstance;
+            switch (level) {
+                case "info":
+                    c = chalk.whiteBright;
+                    break;
+                case "warning":
+                    c = chalk.yellowBright;
+                    break;
+                case "error":
+                    c = chalk.redBright;
+                    break;
+                default:
+                    c = chalk.grey;
             }
 
-            pending.logMessageCount += 1;
-        }
+            const pending = this.pendingOperation;
+            if (pending !== null) {
+                if (pending.logMessageCount === 0) {
+                    process.stdout.write(`${chalk.gray("...")}\n`);
+                }
 
-        process.stdout.write(`[${scope}] ${c(text)}\n`);
+                pending.logMessageCount += 1;
+            }
+
+            process.stdout.write(`[${scope}] ${c(text)}\n`);
+        });
     }
 }
 
@@ -93,35 +110,38 @@ interface PendingOperation {
     logMessageCount: number;
 }
 
-function parseArguments(): Config {
-    let targetDevice: TargetDevice = {
-        kind: "local"
-    };
+interface Arguments {
+    targetDevices: TargetDevice[];
+    targetProcess: TargetProcess;
+}
+
+function parseArguments(): Arguments {
+    let targetDevices: TargetDevice[] = [];
     let pids: number[] = [];
     let targetProcess: TargetProcess | null = null;
 
     program
         .option("-U, --usb", "Connect to USB device", () => {
-            targetDevice = {
+            targetDevices.push({
                 kind: "usb"
-            };
+            });
         })
         .option("-R, --remote", "Connect to remote frida-server", () => {
-            targetDevice = {
+            targetDevices.push({
                 kind: "remote"
-            };
+            });
         })
         .option("-H --host [HOST]", "Connect to remote frida-server by host", (host: string) => {
-            targetDevice = {
+            targetDevices.push({
                 kind: "by-host",
                 host: host
-            };
+            });
         })
         .option("-D, --device [ID]", "Connect to device with the given ID", (id: string) => {
-            targetDevice = {
+            targetDevices.push({
                 kind: "by-id",
                 id: id
-            };
+            });
         })
         .option("-f, --file [FILE]", "Spawn FILE", (file: string) => {
             targetProcess = {
@@ -138,6 +158,12 @@ function parseArguments(): Config {
         .option("-a, --all-by-name [NAME]", "Attach to all processes named NAME", (name: string) => {
             targetProcess = {
                 kind: "all-by-name",
+                name: name
+            };
+        })
+        .option("-1, --any-by-name [NAME]", "Attach to any process named NAME", (name: string) => {
+            targetProcess = {
+                kind: "any-by-name",
                 name: name
             };
         })
@@ -161,12 +187,22 @@ function parseArguments(): Config {
         })
         .parse(process.argv);
 
+    if (process.argv.length < 3) {
+        program.help();
+    }
+
+    if (targetDevices.length === 0) {
+        targetDevices.push({
+            kind: "local"
+        })
+    }
+
     if (targetProcess === null) {
         targetProcess = inferTargetProcess(program);
     }
 
     return {
-        targetDevice,
+        targetDevices,
         targetProcess
     };
 }

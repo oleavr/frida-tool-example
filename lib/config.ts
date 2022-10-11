@@ -15,6 +15,7 @@ export type TargetProcess =
     | TargetProcessSpawn
     | TargetProcessByName
     | TargetProcessAllByName
+    | TargetProcessAnyByName
     | TargetProcessById
     | TargetProcessByGating
     | TargetProcessByFrontmost
@@ -54,6 +55,11 @@ export interface TargetProcessByName {
 
 export interface TargetProcessAllByName {
     kind: "all-by-name";
+    name: string;
+}
+
+export interface TargetProcessAnyByName {
+    kind: "any-by-name";
     name: string;
 }
 
