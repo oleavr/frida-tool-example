@@ -13,26 +13,36 @@ import { program, Command } from "commander";
 import prettyHrtime from "pretty-hrtime";
 
 async function main(): Promise<void> {
+    const apps: Application[] = [];
+
     try {
-        const config = parseArguments();
+        const args = parseArguments();
         const ui = new ConsoleUI();
 
-        let app: Application | null = new Application(config, ui);
+        for (const targetDevice of args.targetDevices) {
+            const config: Config = {
+                targetDevice,
+                targetProcess: args.targetProcess
+            };
+            apps.push(new Application(config, ui));
+        }
 
         process.on("SIGINT", stop);
         process.on("SIGTERM", stop);
 
-        await app.run();
-
-        function stop(): void {
-            if (app !== null) {
-                app.dispose();
-                app = null;
-            }
-        }
+        await Promise.all(apps.map(a => a.run()));
     } catch (error) {
         process.exitCode = 1;
-        process.stderr.write(`${chalk.redBright((error as Error).stack)}\n`);
+        let e = error as Error;
+        process.stderr.write(`${chalk.redBright(e.stack)}\n`);
+    } finally {
+        stop();
+    }
+
+    function stop() {
+        for (let app of apps) {
+            app.dispose();
+        }
     }
 }
 
@@ -40,8 +50,6 @@ class ConsoleUI implements Delegate {
     private pendingOperation: PendingOperation | null = null;
 
     public onProgress(operation: Operation): void {
-        process.stdout.write(`[${operation.scope}] ${chalk.cyan(operation.description)} `);
-
         const pending = {
             operation: operation,
             logMessageCount: 0,
@@ -50,10 +58,10 @@ class ConsoleUI implements Delegate {
 
         operation.onceComplete(() => {
             if (pending.logMessageCount > 0) {
-                process.stdout.write(`[${operation.scope}] ${chalk.cyan(`${operation.description} completed`)} `);
+                process.stdout.write(`[${operation.scope}] ${chalk.cyan(`${operation.description} completed`)}\n`);
             }
 
-            process.stdout.write(chalk.gray(`(${prettyHrtime(operation.elapsed)})\n`));
+            process.stdout.write(`[${operation.scope}] ${chalk.cyan(operation.description)} ${chalk.gray(prettyHrtime(operation.elapsed))}\n`);
 
             this.pendingOperation = null;
         });
@@ -93,34 +101,38 @@ interface PendingOperation {
     logMessageCount: number;
 }
 
-function parseArguments(): Config {
-    let targetDevice: TargetDevice = {
-        kind: "local"
-    };
+interface Arguments {
+    targetDevices: TargetDevice[];
+    targetProcess: TargetProcess;
+}
+
+function parseArguments(): Arguments {
+    const targetDevices: TargetDevice[] = [];
+    const pids: number[] = [];
     let targetProcess: TargetProcess | null = null;
 
     program
         .option("-U, --usb", "Connect to USB device", () => {
-            targetDevice = {
+            targetDevices.push({
                 kind: "usb"
-            };
+            });
         })
         .option("-R, --remote", "Connect to remote frida-server", () => {
-            targetDevice = {
+            targetDevices.push({
                 kind: "remote"
-            };
+            });
         })
         .option("-H --host [HOST]", "Connect to remote frida-server by host", (host: string) => {
-            targetDevice = {
+            targetDevices.push({
                 kind: "by-host",
                 host: host
-            };
+            });
         })
         .option("-D, --device [ID]", "Connect to device with the given ID", (id: string) => {
-            targetDevice = {
+            targetDevices.push({
                 kind: "by-id",
                 id: id
-            };
+            });
         })
         .option("-f, --file [FILE]", "Spawn FILE", (file: string) => {
             targetProcess = {
@@ -134,10 +146,23 @@ function parseArguments(): Config {
                 name: name
             };
         })
-        .option("-p, --attach-pid [PID]", "Attach to PID", (id: string) => {
+        .option("-a, --all-by-name [NAME]", "Attach to all processes named NAME", (name: string) => {
             targetProcess = {
-                kind: "by-id",
-                id: parseInt(id, 10)
+                kind: "all-by-name",
+                name: name
+            };
+        })
+        .option("-1, --any-by-name [NAME]", "Attach to any process named NAME", (name: string) => {
+            targetProcess = {
+                kind: "any-by-name",
+                name: name
+            };
+        })
+        .option("-p, --attach-pid [PID]", "Attach to PID", (id: string) => {
+            pids.push(parseInt(id, 10));
+            targetProcess = {
+                kind: "by-ids",
+                ids: pids
             };
         })
         .option("-F, --attach-frontmost", "attach to frontmost application", () => {
@@ -153,13 +178,23 @@ function parseArguments(): Config {
         })
         .parse(process.argv);
 
+    if (process.argv.length < 3) {
+        program.help();
+    }
+
+    if (targetDevices.length === 0) {
+        targetDevices.push({
+            kind: "local"
+        });
+    }
+
     if (targetProcess === null) {
         targetProcess = inferTargetProcess(program);
     }
 
     return {
-        targetDevice,
-        targetProcess,
+        targetDevices,
+        targetProcess
     };
 }
 
@@ -172,8 +207,8 @@ function inferTargetProcess(prog: Command): TargetProcess {
     const potentialPid = parseInt(spec, 10);
     if (!isNaN(potentialPid)) {
         return {
-            kind: "by-id",
-            id: potentialPid
+            kind: "by-ids",
+            ids: [potentialPid]
         }
     }
 
