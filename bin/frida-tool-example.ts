@@ -4,6 +4,7 @@ import {
     Delegate,
     Operation,
     LogLevel,
+    Target,
     TargetDevice,
     TargetProcess,
 } from "../lib/index.js";
@@ -13,48 +14,42 @@ import { program, Command } from "commander";
 import prettyHrtime from "pretty-hrtime";
 
 async function main(): Promise<void> {
-    const apps: Application[] = [];
+    const args = parseArguments();
+
+    const config: Config = {
+        targets: args.targets,
+    };
+    const ui = new ConsoleUI();
+
+    const app = new Application(config, ui);
+
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
 
     try {
-        const args = parseArguments();
-        const ui = new ConsoleUI();
-
-        for (const targetDevice of args.targetDevices) {
-            const config: Config = {
-                targetDevice,
-                targetProcess: args.targetProcess
-            };
-            apps.push(new Application(config, ui));
-        }
-
-        process.on("SIGINT", stop);
-        process.on("SIGTERM", stop);
-
-        await Promise.all(apps.map(a => a.run()));
+        await app.run();
     } catch (error) {
         process.exitCode = 1;
-        let e = error as Error;
+        const e = error as Error;
         process.stderr.write(`${chalk.redBright(e.stack)}\n`);
     } finally {
         stop();
     }
 
     function stop() {
-        for (let app of apps) {
-            app.dispose();
-        }
+        app.dispose();
     }
 }
 
 class ConsoleUI implements Delegate {
-    private pendingOperation: PendingOperation | null = null;
+    #pendingOperation: PendingOperation | null = null;
 
     public onProgress(operation: Operation): void {
         const pending = {
             operation: operation,
             logMessageCount: 0,
         };
-        this.pendingOperation = pending;
+        this.#pendingOperation = pending;
 
         operation.onceComplete(() => {
             if (pending.logMessageCount > 0) {
@@ -63,7 +58,7 @@ class ConsoleUI implements Delegate {
 
             process.stdout.write(`[${operation.scope}] ${chalk.cyan(operation.description)} ${chalk.gray(prettyHrtime(operation.elapsed))}\n`);
 
-            this.pendingOperation = null;
+            this.#pendingOperation = null;
         });
     }
 
@@ -83,7 +78,7 @@ class ConsoleUI implements Delegate {
                 c = chalk.grey;
         }
 
-        const pending = this.pendingOperation;
+        const pending = this.#pendingOperation;
         if (pending !== null) {
             if (pending.logMessageCount === 0) {
                 process.stdout.write(`${chalk.gray("...")}\n`);
@@ -102,79 +97,74 @@ interface PendingOperation {
 }
 
 interface Arguments {
-    targetDevices: TargetDevice[];
-    targetProcess: TargetProcess;
+    targets: Target[];
 }
 
 function parseArguments(): Arguments {
-    const targetDevices: TargetDevice[] = [];
-    const pids: number[] = [];
-    let targetProcess: TargetProcess | null = null;
+    const targets: Target[] = [];
 
     program
         .option("-U, --usb", "Connect to USB device", () => {
-            targetDevices.push({
-                kind: "usb"
-            });
+            openNewTarget({ kind: "usb" });
         })
         .option("-R, --remote", "Connect to remote frida-server", () => {
-            targetDevices.push({
+            openNewTarget({
                 kind: "remote"
             });
         })
         .option("-H --host [HOST]", "Connect to remote frida-server by host", (host: string) => {
-            targetDevices.push({
+            openNewTarget({
                 kind: "by-host",
                 host: host
             });
         })
         .option("-D, --device [ID]", "Connect to device with the given ID", (id: string) => {
-            targetDevices.push({
+            openNewTarget({
                 kind: "by-id",
                 id: id
             });
         })
         .option("-f, --file [FILE]", "Spawn FILE", (file: string) => {
-            targetProcess = {
+            addTargetProcess({
                 kind: "spawn",
                 program: file
-            };
+            });
         })
         .option("-n, --attach-name [NAME]", "Attach to NAME", (name: string) => {
-            targetProcess = {
+            addTargetProcess({
                 kind: "by-name",
                 name: name
-            };
+            });
         })
         .option("-a, --all-by-name [NAME]", "Attach to all processes named NAME", (name: string) => {
-            targetProcess = {
+            addTargetProcess({
                 kind: "all-by-name",
                 name: name
-            };
+            });
         })
         .option("-1, --any-by-name [NAME]", "Attach to any process named NAME", (name: string) => {
-            targetProcess = {
+            addTargetProcess({
                 kind: "any-by-name",
                 name: name
-            };
+            });
         })
         .option("-p, --attach-pid [PID]", "Attach to PID", (id: string) => {
-            pids.push(parseInt(id, 10));
-            targetProcess = {
+            const pid = parseInt(id, 10);
+            addTargetProcess({
                 kind: "by-ids",
-                ids: pids
-            };
+                ids: [pid]
+            });
         })
         .option("-F, --attach-frontmost", "attach to frontmost application", () => {
-            targetProcess = {
+            addTargetProcess({
                 kind: "by-frontmost"
-            };
+            });
         })
         .option("-w, --wait [NAME]", "Attach to NAME as soon as it's spawned", (name: string) => {
-            targetProcess = {
+            addTargetProcess({
                 kind: "by-gating",
                 name: name
-            };
+            });
         })
         .parse(process.argv);
 
@@ -182,19 +172,39 @@ function parseArguments(): Arguments {
         program.help();
     }
 
-    if (targetDevices.length === 0) {
-        targetDevices.push({
-            kind: "local"
-        });
+    const numTargetProcesses = targets.reduce((total, target) => total + target.processes.length, 0);
+    if (numTargetProcesses === 0) {
+        addTargetProcess(inferTargetProcess(program));
     }
 
-    if (targetProcess === null) {
-        targetProcess = inferTargetProcess(program);
+    function openNewTarget(device: TargetDevice): Target {
+        const target: Target = {
+            device,
+            processes: []
+        };
+        targets.push(target);
+        return target;
+    }
+
+    function addTargetProcess(process: TargetProcess) {
+        const target = (targets.length !== 0)
+            ? targets[targets.length - 1]
+            : openNewTarget({ kind: "local" });
+
+        if (process.kind === "by-ids") {
+            const processes = target.processes;
+            const previous = processes[processes.length - 1];
+            if (previous?.kind === "by-ids") {
+                previous.ids.push(...process.ids);
+                return;
+            }
+        }
+
+        target.processes.push(process);
     }
 
     return {
-        targetDevices,
-        targetProcess
+        targets,
     };
 }
 

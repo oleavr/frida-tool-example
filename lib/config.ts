@@ -1,6 +1,10 @@
 export interface Config {
-    targetDevice: TargetDevice;
-    targetProcess: TargetProcess;
+    targets: Target[];
+}
+
+export interface Target {
+    device: TargetDevice;
+    processes: TargetProcess[];
 }
 
 export type TargetDevice =

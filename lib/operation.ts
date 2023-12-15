@@ -11,30 +11,28 @@ export interface Operation {
 
 export class AsyncOperation implements Operation {
     get elapsed(): HRTime {
-        if (this.duration === null) {
-            return process.hrtime(this.startTime);
+        if (this.#duration === null) {
+            return process.hrtime(this.#startTime);
         }
 
-        return this.duration;
+        return this.#duration;
     }
 
-    private startTime: HRTime = process.hrtime();
-    private duration: HRTime | null = null;
-    private events: EventEmitter = new EventEmitter();
+    #startTime: HRTime = process.hrtime();
+    #duration: HRTime | null = null;
+    #events: EventEmitter = new EventEmitter();
 
     constructor(
             public scope: string,
             public description: string) {
-        this.scope = scope;
-        this.description = description;
     }
 
     public onceComplete(callback: (error?: Error) => void) {
-        this.events.once("complete", callback);
+        this.#events.once("complete", callback);
     }
 
     public complete(error?: Error) {
-        this.duration = process.hrtime(this.startTime);
-        this.events.emit("complete", error);
+        this.#duration = process.hrtime(this.#startTime);
+        this.#events.emit("complete", error);
     }
 }

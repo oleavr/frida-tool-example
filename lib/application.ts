@@ -1,87 +1,247 @@
 import { AgentApi } from "./agent/interfaces.js";
-import { Config, TargetDevice, TargetProcess, TargetProcessById } from "./config.js";
+import {
+    Config,
+    TargetDevice,
+    TargetProcess,
+    TargetProcessAllByName,
+    TargetProcessById,
+} from "./config.js";
 import { Operation, AsyncOperation } from "./operation.js";
 
 import { EventEmitter } from "events";
 import * as frida from "frida";
-import { Cancellable } from "frida/dist/cancellable.js";
-import { LogLevel } from "frida/dist/script.js";
+import {
+    Cancellable,
+    Child,
+    Device,
+    LogLevel,
+    Message,
+    MessageType,
+    Process,
+    Script,
+    ScriptRuntime,
+    Session,
+    SessionDetachReason,
+    SpawnAddedHandler,
+} from "frida";
 import * as fs from "fs";
 import { promisify } from "util";
 
 const readFile = promisify(fs.readFile);
 
 export class Application {
-    private device: frida.Device | null = null;
-    private processes: Map<number, frida.Process> = new Map<number, frida.Process>()
-    private agents: Map<number, Agent> = new Map<number, Agent>();
-    private done: Promise<void>;
-    private cancellable = new Cancellable();
-    private onSuccess: () => void;
-    private onFailure: (error: Error) => void;
-    private onSpawnGatingDisabled: (error: Error) => void;
+    #config: Config;
+    #delegate: Delegate;
 
-    private scheduler: OperationScheduler;
+    #controllers: DeviceController[] = [];
+    #cancellable = new Cancellable();
 
-    constructor(
-            private config: Config,
-            private delegate: Delegate) {
-        this.onSuccess = () => {};
-        this.onFailure = () => {};
-        this.onSpawnGatingDisabled = () => {};
+    #scheduler: OperationScheduler;
 
-        this.done = new Promise((resolve: () => void, reject: (error: Error) => void) => {
-            this.onSuccess = resolve;
-            this.onFailure = reject;
-        });
+    constructor(config: Config, delegate: Delegate) {
+        this.#config = config;
+        this.#delegate = delegate;
 
-        this.done.finally(() => this.dispose());
-
-        this.scheduler = new OperationScheduler("application", delegate);
+        this.#scheduler = new OperationScheduler("application", delegate);
     }
 
     public async dispose(): Promise<void> {
-        await Promise.all(Array.from(this.agents.values()).map(a => a.dispose()));
-        this.cancellable.cancel();
-
-        if (this.device !== null) {
-            this.device.childAdded.disconnect(this.onChildAdded);
-            await this.disableSpawnGating();
-            this.device = null;
+        for (const controller of this.#controllers) {
+            await controller.dispose();
         }
+
+        this.#cancellable.cancel();
     }
 
     public async run(): Promise<void> {
-        const { targetDevice, targetProcess } = this.config;
+        const controllerByDeviceId = new Map<string, DeviceController>();
 
-        const device = await this.getDevice(targetDevice);
-        this.device = device;
-        device.childAdded.connect(this.onChildAdded);
+        try {
+            console.log(JSON.stringify(this.#config.targets));
+            for (const target of this.#config.targets) {
+                const device = await this.#getDevice(target.device);
+                const { id: deviceId } = device;
 
-        const processes = await this.getProcesses(targetProcess);
-        for (let process of processes) {
-            if (!this.processes.has(process.pid)) {
-                this.processes.set(process.pid, process);
+                let controller = controllerByDeviceId.get(deviceId);
+                if (controller === undefined) {
+                    controller = new DeviceController(device, this.#delegate, this.#scheduler, this.#cancellable);
+                    controllerByDeviceId.set(deviceId, controller);
+                    this.#controllers.push(controller);
+                }
 
-                const agent = await this.instrument(process.pid, process.name);
+                await controller.add(target.processes);
+            }
 
-                if (targetProcess.kind === "spawn" || targetProcess.kind === "by-gating") {
-                    await agent.scheduler.perform("Resuming", (): Promise<void> => {
-                        return device.resume(process.pid);
-                    });
+            await Promise.all(this.#controllers.map(c => c.join()));
+        } finally {
+            this.dispose();
+        }
+    }
+
+    async #getDevice(targetDevice: TargetDevice): Promise<Device> {
+        return this.#scheduler.perform("Getting device", async (): Promise<Device> => {
+            let device: Device;
+
+            switch (targetDevice.kind) {
+                case "local":
+                    device = await frida.getLocalDevice(this.#cancellable);
+                    break;
+                case "usb":
+                    device = await frida.getUsbDevice(undefined, this.#cancellable);
+                    break;
+                case "remote":
+                    device = await frida.getRemoteDevice(this.#cancellable);
+                    break;
+                case "by-host":
+                    device = await frida.getDeviceManager().addRemoteDevice(targetDevice.host, undefined, this.#cancellable);
+                    break;
+                case "by-id":
+                    device = await frida.getDevice(targetDevice.id, undefined, this.#cancellable);
+                    break;
+                default:
+                    throw new Error("Invalid target device");
+            }
+
+            return device;
+        });
+    }
+}
+
+class DeviceController {
+    #delegate: Delegate;
+    #scheduler: OperationScheduler;
+    #cancellable: Cancellable;
+
+    #done: Promise<void>;
+    #onSuccess: () => void = () => {};
+    #onFailure: (error: Error) => void = () => {};
+    #enlistTask: Promise<void> | null = null;
+
+    #processes: Map<number, Process> = new Map<number, Process>()
+    #agents: Map<number, Agent> = new Map<number, Agent>();
+
+    #onSpawnGatingDisabled: (error: Error) => void = () => {};
+
+    constructor(public device: Device, delegate: Delegate, scheduler: OperationScheduler, cancellable: Cancellable) {
+        this.#delegate = delegate;
+        this.#scheduler = scheduler;
+        this.#cancellable = cancellable;
+
+        this.#done = new Promise((resolve, reject) => {
+            this.#onSuccess = resolve;
+            this.#onFailure = reject;
+        });
+
+        device.childAdded.connect(this.#onChildAdded);
+    }
+
+    async dispose() {
+        await Promise.all(Array.from(this.#agents.values()).map(a => a.dispose()));
+
+        this.device.childAdded.disconnect(this.#onChildAdded);
+        await this.#disableSpawnGating();
+    }
+
+    async add(targetProcesses: TargetProcess[]) {
+        const { device } = this;
+        const processes = this.#processes;
+
+        const allByNameTargets: TargetProcessAllByName[] = [];
+
+        for (const targetProcess of targetProcesses) {
+            for (const process of await this.#getProcesses(targetProcess)) {
+                const { pid } = process;
+                if (!processes.has(pid)) {
+                    processes.set(pid, process);
+
+                    const agent = await this.#instrument(process.pid, process.name);
+
+                    if (targetProcess.kind === "spawn" || targetProcess.kind === "by-gating") {
+                        await agent.scheduler.perform("Resuming", (): Promise<void> => {
+                            return device.resume(process.pid);
+                        });
+                    }
+
+                    if (targetProcess.kind === "all-by-name") {
+                        allByNameTargets.push(targetProcess);
+                    }
                 }
             }
         }
 
-        if (targetProcess.kind === "all-by-name") {
-            await this.enlistNewProcesses(targetProcess.name);
+        if (allByNameTargets.length !== 0) {
+            this.#enlistTask = this.#enlistNewProcesses(allByNameTargets);
         }
-
-        return this.done;
     }
 
-    private onChildAdded = async (child: frida.Child): Promise<void> => {
-        const device = this.device as frida.Device;
+    join(): Promise<void> {
+        return this.#done;
+    }
+
+    async #instrument(pid: number, name: string): Promise<Agent> {
+        const { device } = this;
+
+        const agent = await Agent.inject(device, pid, name, this.#delegate);
+        this.#agents.set(pid, agent);
+
+        this.#delegate.onConsoleMessage("application", LogLevel.Info, `Attached PID: ${name}:${pid}@${device.name}`);
+
+        agent.events.once("uninjected", (reason: SessionDetachReason) => {
+            this.#agents.delete(pid);
+
+            const name = this.#processes.get(pid);
+            if (name !== undefined) {
+                this.#processes.delete(pid);
+
+                switch (reason) {
+                    case SessionDetachReason.ApplicationRequested:
+                        break;
+                    case SessionDetachReason.ProcessReplaced:
+                        return;
+                    case SessionDetachReason.ProcessTerminated:
+                        this.#delegate.onConsoleMessage("application", LogLevel.Warning,
+                            `Detached PID: ${name}:${pid}@${device.name}, ${this.#processes.size} remaining`);
+
+                        if (this.#processes.size === 0) {
+                            this.#delegate.onConsoleMessage("application", LogLevel.Warning,
+                                `All processes lost on host: ${device.name}`);
+                        }
+
+                        break;
+                    case SessionDetachReason.ConnectionTerminated:
+                    case SessionDetachReason.DeviceLost:
+                        const message = reason[0].toUpperCase() + reason.substr(1).replace(/-/g, " ");
+                        this.#onFailure(new Error(message));
+                        break;
+                    default:
+                }
+            }
+
+            if (this.#enlistTask === null && this.#agents.size === 0) {
+                this.#onSuccess();
+            }
+        });
+
+        return agent;
+    }
+
+    async #disableSpawnGating(): Promise<void> {
+        const { device } = this;
+
+        this.#onSpawnGatingDisabled(new Error("Spawn gating disabled"));
+
+        try {
+            await device.disableSpawnGating();
+            const pendingSpawns = await device.enumeratePendingSpawn();
+            for (const pending of pendingSpawns) {
+                await device.resume(pending.pid);
+            }
+        } catch (e) {
+        }
+    }
+
+    #onChildAdded = async (child: Child): Promise<void> => {
+        const { device } = this;
 
         try {
             try {
@@ -98,7 +258,7 @@ export class Application {
                 }
 
                 if (name === null && child.origin === "fork") {
-                    const parent = this.agents.get(child.parentPid);
+                    const parent = this.#agents.get(child.parentPid);
                     if (parent !== undefined) {
                         name = parent.name;
                     }
@@ -110,7 +270,7 @@ export class Application {
 
                 name += ` from ${child.origin}`;
 
-                const agent = await this.instrument(child.pid, name);
+                const agent = await this.#instrument(child.pid, name);
 
                 await agent.scheduler.perform("Resuming", (): Promise<void> => {
                     return device.resume(child.pid);
@@ -127,100 +287,15 @@ export class Application {
         }
     };
 
-    private async instrument(pid: number, name: string): Promise<Agent> {
-        const agent = await Agent.inject(this.device as frida.Device, pid, name, this.delegate);
-        this.agents.set(pid, agent);
-
-        if (this.config.targetProcess.kind === "all-by-name") {
-            this.delegate.onConsoleMessage("application", LogLevel.Info,
-                `Attached PID: ${name}:${pid}@${this.device?.name}, ${this.processes.size} total`);
-        } else {
-            this.delegate.onConsoleMessage("application", LogLevel.Info,
-                `Attached PID: ${name}:${pid}@${this.device?.name}`);
-        }
-
-        agent.events.once("uninjected", (reason: frida.SessionDetachReason) => {
-            this.agents.delete(pid);
-
-            if (this.processes.has(pid)) {
-                let name = this.processes.get(pid)?.name;
-                this.processes.delete(pid);
-                switch (reason) {
-                    case frida.SessionDetachReason.ApplicationRequested:
-                        break;
-                    case frida.SessionDetachReason.ProcessReplaced:
-                        return;
-                    case frida.SessionDetachReason.ProcessTerminated:
-                        if (this.config.targetProcess.kind === "all-by-name") {
-                            this.delegate.onConsoleMessage("application", LogLevel.Warning,
-                                `Detached PID: ${name}:${pid}@${this.device?.name}, ${this.processes.size} remaining`);
-                        } else {
-                            this.delegate.onConsoleMessage("application", LogLevel.Warning,
-                                `Detached PID: ${name}:${pid}@${this.device?.name}`);
-                        }
-
-                        if (this.processes.size === 0) {
-                            this.delegate.onConsoleMessage("application", LogLevel.Warning,
-                                `All processes lost on host: ${this.device?.name}\n`);
-                        }
-
-                        break;
-                    case frida.SessionDetachReason.ConnectionTerminated:
-                    case frida.SessionDetachReason.DeviceLost:
-                        const message = reason[0].toUpperCase() + reason.substr(1).replace(/-/g, " ");
-                        this.onFailure(new Error(message));
-                        break;
-                    default:
-                }
-            }
-
-            if (this.config.targetProcess.kind !== "all-by-name") {
-                if (this.agents.size === 0) {
-                    this.onSuccess();
-                }
-            }
-        });
-
-        return agent;
-    }
-
-    private async getDevice(targetDevice: TargetDevice): Promise<frida.Device> {
-        return this.scheduler.perform("Getting device", async (): Promise<frida.Device> => {
-            let device: frida.Device;
-
-            switch (targetDevice.kind) {
-                case "local":
-                    device = await frida.getLocalDevice(this.cancellable);
-                    break;
-                case "usb":
-                    device = await frida.getUsbDevice(undefined, this.cancellable);
-                    break;
-                case "remote":
-                    device = await frida.getRemoteDevice(this.cancellable);
-                    break;
-                case "by-host":
-                    device = await frida.getDeviceManager().addRemoteDevice(targetDevice.host, undefined, this.cancellable);
-                    break;
-                case "by-id":
-                    device = await frida.getDevice(targetDevice.id, undefined, this.cancellable);
-                    break;
-                default:
-                    throw new Error("Invalid target device");
-            }
-
-            return device;
-        });
-    }
-
-    private async findNamedProcesses(targetProcessName: string): Promise<frida.Process[]> {
-        const processes = await this.device!.enumerateProcesses(undefined, this.cancellable);
-        const untraced = processes.filter(process => !this.agents.has(process.pid));
+    async #findNamedProcesses(targetProcessName: string): Promise<Process[]> {
+        const processes = await this.device.enumerateProcesses(undefined, this.#cancellable);
+        const untraced = processes.filter(process => !this.#agents.has(process.pid));
         return untraced.filter(process => process.name === targetProcessName);
     }
 
-    private async findNumberedProcesses(targetProcess: TargetProcessById): Promise<frida.Process[]> {
-        const processes = await this.device!.enumerateProcesses({}, this.cancellable);
-        const processesById = new Map<number, frida.Process>(processes.map(p => [p.pid, p]));
+    async #findNumberedProcesses(targetProcess: TargetProcessById): Promise<Process[]> {
+        const processes = await this.device.enumerateProcesses({}, this.#cancellable);
+        const processesById = new Map<number, Process>(processes.map(p => [p.pid, p]));
 
         const notFound = targetProcess.ids.filter(pid => !processesById.has(pid));
         if (notFound.length !== 0) {
@@ -230,65 +305,69 @@ export class Application {
         return targetProcess.ids.map(pid => processesById.get(pid)!);
     }
 
-    private async enlistNewProcesses(targetProcessName: string): Promise<void> {
-        while (!this.cancellable.isCancelled) {
-            const processes = await this.findNamedProcesses(targetProcessName);
-            for (let process of processes) {
-                if (!this.processes.has(process.pid)) {
-                    this.processes.set(process.pid, process);
+    async #enlistNewProcesses(targets: TargetProcessAllByName[]): Promise<void> {
+        while (!this.#cancellable.isCancelled) {
+            for (const target of targets) {
+                try {
+                    const processes = await this.#findNamedProcesses(target.name);
+                    for (let process of processes) {
+                        if (!this.#processes.has(process.pid)) {
+                            this.#processes.set(process.pid, process);
 
-                    await this.instrument(process.pid, process.name);
+                            await this.#instrument(process.pid, process.name);
+                        }
+                    }
+                } catch (e) {
+                    this.#delegate.onConsoleMessage(target.name, LogLevel.Warning, (e as Error).message);
                 }
             }
 
-            if (processes.length === 0) {
-                await new Promise(resolve => {
-                    setTimeout(resolve, 500);
-                });
-            }
+            await new Promise(resolve => {
+                setTimeout(resolve, 500);
+            });
         }
     }
 
-    private async getProcesses(targetProcess: TargetProcess): Promise<frida.Process[]> {
-        let pid: number;
+    async #getProcesses(targetProcess: TargetProcess): Promise<Process[]> {
+        const { device } = this;
 
-        const device = this.device as frida.Device;
+        let pid: number;
         switch (targetProcess.kind) {
             case "spawn":
-                pid = await this.scheduler.perform(`Spawning "${targetProcess.program}"`, (): Promise<number> => {
+                pid = await this.#scheduler.perform(`Spawning "${targetProcess.program}"`, (): Promise<number> => {
                     return device.spawn(targetProcess.program);
                 });
                 break;
             case "by-ids":
-                return this.scheduler.perform(`Resolving "${targetProcess.ids.join(", ")}"`, async (): Promise<frida.Process[]> => {
-                    return await this.findNumberedProcesses(targetProcess);
+                return this.#scheduler.perform(`Resolving "${targetProcess.ids.join(", ")}"`, async (): Promise<Process[]> => {
+                    return await this.#findNumberedProcesses(targetProcess);
                 });
             case "by-name":
-                return this.scheduler.perform(`Resolving "${targetProcess.name}"`, async (): Promise<frida.Process[]> => {
-                    return [await device.getProcess(targetProcess.name, undefined, this.cancellable)];
+                return this.#scheduler.perform(`Resolving "${targetProcess.name}"`, async (): Promise<Process[]> => {
+                    return [await device.getProcess(targetProcess.name, undefined, this.#cancellable)];
                 });
             case "all-by-name":
-                return this.scheduler.perform(`Resolving "${targetProcess.name}"`, async (): Promise<frida.Process[]> => {
-                    return this.findNamedProcesses(targetProcess.name);
+                return this.#scheduler.perform(`Resolving "${targetProcess.name}"`, async (): Promise<Process[]> => {
+                    return this.#findNamedProcesses(targetProcess.name);
                 });
             case "any-by-name":
-                return this.scheduler.perform(`Resolving "${targetProcess.name}"`, async (): Promise<frida.Process[]> => {
-                    return this.findNamedProcesses(targetProcess.name).then((targetProcesses) => {
+                return this.#scheduler.perform(`Resolving "${targetProcess.name}"`, async (): Promise<Process[]> => {
+                    return this.#findNamedProcesses(targetProcess.name).then((targetProcesses) => {
                         if (targetProcesses.length === 0) {
-                            throw new Error(`Failed to find process "${targetProcess.name}" on host "${this.device?.name}"`)
+                            throw new Error(`Failed to find process "${targetProcess.name}" on host "${this.device.name}"`)
                         }
                         return [targetProcesses[0]];
                     });
                 });
             case "by-gating":
-                return await this.scheduler.perform(`Waiting for "${targetProcess.name}"`, (): Promise<frida.Process[]> => {
+                return await this.#scheduler.perform(`Waiting for "${targetProcess.name}"`, (): Promise<Process[]> => {
                     return new Promise((resolve, reject) => {
-                        this.onSpawnGatingDisabled = fatReject;
+                        this.#onSpawnGatingDisabled = fatReject;
 
-                        const onSpawnAdded: frida.SpawnAddedHandler = async (spawn) => {
+                        const onSpawnAdded: SpawnAddedHandler = async (spawn) => {
                             const { identifier, pid } = spawn;
 
-                            const processes = await device.enumerateProcesses(undefined, this.cancellable);
+                            const processes = await device.enumerateProcesses(undefined, this.#cancellable);
                             const proc = processes.find(p => p.pid === pid);
                             if (proc === undefined) {
                                 device.resume(pid);
@@ -308,17 +387,14 @@ export class Application {
                         device.enableSpawnGating()
                             .catch(fatReject);
 
-                        function fatReject(error: Error): void {
-                            try {
-                                device.spawnAdded.disconnect(onSpawnAdded);
-                            } catch (e) {
-                            }
+                        function fatReject(error: Error) {
+                            device.spawnAdded.disconnect(onSpawnAdded);
                             reject(error);
                         }
                     });
                 });
             case "by-frontmost":
-                const frontmost = await device.getFrontmostApplication(undefined, this.cancellable);
+                const frontmost = await device.getFrontmostApplication(undefined, this.#cancellable);
                 if (frontmost === null) {
                     throw new Error(`No frontmost application on ${device.name}`);
                 }
@@ -328,87 +404,70 @@ export class Application {
                 throw new Error("Invalid target process");
         }
 
-        const processes = await device.enumerateProcesses(undefined, this.cancellable);
-        const proc = processes.find((p: frida.Process) => p.pid === pid);
+        const processes = await device.enumerateProcesses(undefined, this.#cancellable);
+        const proc = processes.find((p: Process) => p.pid === pid);
         if (proc === undefined) {
             throw new Error("Process not found");
         }
 
         return [proc];
     }
-
-    private async disableSpawnGating(): Promise<void> {
-        this.onSpawnGatingDisabled(new Error("Spawn gating disabled"));
-
-        const device = this.device as frida.Device;
-
-        try {
-            await device.disableSpawnGating();
-            const pendingSpawns = await device.enumeratePendingSpawn();
-            for (const pending of pendingSpawns) {
-                await device.resume(pending.pid);
-            }
-        } catch (e) {
-        }
-    }
 }
 
 export interface Delegate {
     onProgress(operation: Operation): void;
-    onConsoleMessage(scope: string, level: frida.LogLevel, text: string): void;
+    onConsoleMessage(scope: string, level: LogLevel, text: string): void;
 }
 
 class Agent {
-    public device: string;
-    public pid: number;
-    public name: string;
-    public scheduler: OperationScheduler;
-    public events: EventEmitter = new EventEmitter();
+    scheduler: OperationScheduler;
+    events: EventEmitter = new EventEmitter();
 
-    private delegate: Delegate;
+    #delegate: Delegate;
 
-    private session: frida.Session | null = null;
-    private script: frida.Script | null = null;
-    private api: AgentApi | null = null;
+    #session: Session | null = null;
+    #script: Script | null = null;
+    #api: AgentApi | null = null;
 
-    constructor(device: string, pid: number, name: string, delegate: Delegate) {
-        this.device = device;
-        this.pid = pid;
-        this.name = name;
+    constructor(
+            public device: string,
+            public pid: number,
+            public name: string,
+            delegate: Delegate) {
         this.scheduler = new OperationScheduler(`${this.name}:${this.pid}@${this.device}`, delegate);
 
-        this.delegate = delegate;
+        this.#delegate = delegate;
     }
 
-    public static async inject(device: frida.Device, pid: number, name: string, delegate: Delegate): Promise<Agent> {
+    public static async inject(device: Device, pid: number, name: string, delegate: Delegate): Promise<Agent> {
         const agent = new Agent(device.name, pid, name, delegate);
         const { scheduler } = agent;
 
         try {
-            const session = await scheduler.perform(`Attaching to PID ${name}:${pid}@${device.name}`, (): Promise<frida.Session> => {
+            const session = await scheduler.perform(`Attaching to PID ${name}:${pid}@${device.name}`, (): Promise<Session> => {
                 return device.attach(pid);
             });
-            agent.session = session;
-            session.detached.connect(agent.onDetached);
+            agent.#session = session;
+            session.detached.connect(agent.#onDetached);
             await scheduler.perform("Enabling child gating", (): Promise<void> => {
                 return session.enableChildGating();
             });
 
             const code = await readFile(new URL("./agent.js", import.meta.url).pathname, "utf-8");
-            const script = await scheduler.perform("Creating script", (): Promise<frida.Script> => {
-                return session.createScript(code, { runtime: frida.ScriptRuntime.QJS });
+            const script = await scheduler.perform("Creating script", (): Promise<Script> => {
+                return session.createScript(code, { runtime: ScriptRuntime.QJS });
             });
-            agent.script = script;
-            script.logHandler = agent.onConsoleMessage;
-            script.message.connect(agent.onMessage);
+            agent.#script = script;
+            script.logHandler = agent.#onConsoleMessage;
+            script.message.connect(agent.#onMessage);
             await scheduler.perform("Loading script", (): Promise<void> => {
                 return script.load();
             });
 
-            agent.api = script.exports as any as AgentApi;
+            agent.#api = script.exports as any as AgentApi;
 
             await scheduler.perform("Initializing", (): Promise<void> => {
-                return (agent.api as AgentApi).init();
+                return (agent.#api as AgentApi).init();
             });
         } catch (e) {
             await agent.dispose();
@@ -419,9 +478,9 @@ class Agent {
     }
 
     public async dispose() {
-        const script = this.script;
+        const script = this.#script;
         if (script !== null) {
-            this.script = null;
+            this.#script = null;
 
             await this.scheduler.perform("Unloading script", async (): Promise<void> => {
                 try {
@@ -431,9 +490,9 @@ class Agent {
             });
         }
 
-        const session = this.session;
+        const session = this.#session;
         if (session !== null) {
-            this.session = null;
+            this.#session = null;
 
             await this.scheduler.perform("Detaching", async (): Promise<void> => {
                 try {
@@ -444,20 +503,20 @@ class Agent {
         }
     }
 
-    private onDetached = (reason: frida.SessionDetachReason): void => {
+    #onDetached = (reason: SessionDetachReason): void => {
         this.events.emit("uninjected", reason);
     };
 
-    private onConsoleMessage = (level: frida.LogLevel, text: string): void => {
-        this.delegate.onConsoleMessage(`${this.name}:${this.pid}@${this.device}`, level, text);
+    #onConsoleMessage = (level: LogLevel, text: string): void => {
+        this.#delegate.onConsoleMessage(`${this.name}:${this.pid}@${this.device}`, level, text);
     };
 
-    private onMessage = (message: frida.Message, data: Buffer | null): void => {
+    #onMessage = (message: Message, data: Buffer | null): void => {
         switch (message.type) {
-            case frida.MessageType.Send:
+            case MessageType.Send:
                 console.error(`[PID=${this.pid}]:`, message.payload);
                 break;
-            case frida.MessageType.Error:
+            case MessageType.Error:
                 console.error(`[PID=${this.pid}]:`, message.stack);
                 break;
             default:
@@ -466,16 +525,19 @@ class Agent {
 }
 
 class OperationScheduler {
-    constructor(
-            private scope: string,
-            private delegate: Delegate) {
+    #scope: string;
+    #delegate: Delegate;
+
+    constructor(scope: string, delegate: Delegate) {
+        this.#scope = scope;
+        this.#delegate = delegate;
     }
 
     public async perform<T>(description: string, work: () => Promise<T>): Promise<T> {
         let result: T;
 
-        const operation = new AsyncOperation(this.scope, description);
-        this.delegate.onProgress(operation);
+        const operation = new AsyncOperation(this.#scope, description);
+        this.#delegate.onProgress(operation);
 
         try {
             result = await work();

@@ -9,6 +9,7 @@ export const Application = application.Application;
 export type Delegate = application.Delegate;
 
 export type Config = config.Config;
+export type Target = config.Target;
 export type TargetDevice = config.TargetDevice;
 export type TargetProcess = config.TargetProcess;
 
