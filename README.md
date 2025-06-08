@@ -1,7 +1,7 @@
 ### How to build and run
 
 ```sh
-$ git clone git://github.com/oleavr/frida-tool-example.git
+$ git clone https://github.com/oleavr/frida-tool-example.git
 $ cd frida-tool-example/
 $ npm install
 $ node dist/bin/frida-tool-example.js -U -f com.example.android
